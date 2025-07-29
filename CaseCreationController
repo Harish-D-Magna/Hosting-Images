@@ -1,0 +1,209 @@
+public without sharing class CaseCreationController {
+    
+    // Customer information
+    public String customerName { get; set; }
+    public String customerEmail { get; set; }
+    
+    // Enquiry details
+    public String enquiryType { get; set; }
+    
+    //Order subtype
+    Public String selectedSubType { get; set; } 
+    public String orderNumber { get; set; }
+    public String packageCondition { get; set; }
+    public Date dateOfPurchase { get; set; }
+    
+    // File upload
+    public Blob fileBody { get; set; }
+    public String fileName { get; set; }
+    public String contentType { get; set; }
+    
+    // Case reference for display
+    public String caseReference { get; set; }
+    public Boolean showSuccess { get; set; }
+    
+    // Constructor
+    public CaseCreationController() {
+        enquiryType = 'Order'; // Default selection
+        showSuccess = false;
+    }
+    
+    // Check if file upload should be shown
+    public Boolean getShowFileUpload() {
+        return enquiryType == 'Order';
+    }
+    
+    // Handle enquiry type change
+    public PageReference onEnquiryTypeChange() {
+        // Clear file if switching away from Order
+        if (enquiryType != 'Order') {
+            fileBody = null;
+            fileName = null;
+            contentType = null;
+        }
+        return null;
+    }
+    //get Enquiryoptions     
+    public List<SelectOption> getEnquiryOptions() {
+        return getEnquiryTypeOptions('Case', 'Type');
+    }
+    public List<SelectOption> getOrderOptions() {
+        List<SelectOption> options = new List<SelectOption>();
+        options.add(new SelectOption('', '--Please Select--'));
+        options.add(new SelectOption('Missing Item(s)', 'Missing Item'));
+        options.add(new SelectOption('Invoice Request', 'Invoice Request'));
+        options.add(new SelectOption('Cancellation or Modification Request', 'Cancellation or Modification Request'));
+        options.add(new SelectOption('Order Status/ Tracking Request', 'Order Status/ Tracking Request'));
+        options.add(new SelectOption('Stanley Create', 'Stanley Create'));
+        options.add(new SelectOption('Wrong Item(s) Received', 'Wrong Item'));
+        options.add(new SelectOption('Item(s) Received - Damaged', 'Damaged Item'));
+    
+        return options;
+          
+    }
+    
+    // Get package condition options for Missing Item(s)
+    public List<SelectOption> getPackageConditionOptions() {
+        List<SelectOption> options = new List<SelectOption>();
+        options.add(new SelectOption('', '--Please Select--'));
+        options.add(new SelectOption('Box Opened', 'Box Opened'));
+        options.add(new SelectOption('Box Sealed', 'Box Sealed'));
+        options.add(new SelectOption('Box Damaged', 'Box Damaged'));
+        options.add(new SelectOption('No Box Received', 'No Box Received'));
+        return options;
+    }
+    
+    // Get enquiry type options
+    public List<SelectOption> getEnquiryTypeOptions(String objectName, String fieldName) {
+       
+        List<SelectOption> options = new List<SelectOption>();
+        try {
+            // Get the object's describe
+            Schema.SObjectType objType = Schema.getGlobalDescribe().get(objectName);
+            if (objType == null) return options;
+            options.add(new SelectOption('', '--None--'));
+            // Get the field describe
+            Schema.DescribeFieldResult fieldDescribe = objType.getDescribe().fields.getMap().get(fieldName).getDescribe();
+            if (fieldDescribe != null && fieldDescribe.getType() == Schema.DisplayType.Picklist ) {
+                for (Schema.PicklistEntry entry : fieldDescribe.getPicklistValues()) {
+                    options.add(new SelectOption(entry.getValue(), entry.getLabel()));
+                }
+            }
+            else if (fieldDescribe != null || fieldDescribe.getType() == Schema.DisplayType.MultiPicklist) {
+                for (Schema.PicklistEntry entry : fieldDescribe.getPicklistValues()) {
+                    options.add(new SelectOption(entry.getValue(), entry.getLabel()));
+                }
+                system.debug('options'+options);
+            }
+        } catch (Exception ex) {
+            System.debug('Error fetching picklist values: ' + ex.getMessage());
+        }
+        return options;
+    }
+    
+    // Submit case
+    public PageReference submitCase() {
+        try {
+            // Validate required fields
+            if (String.isBlank(customerName) || String.isBlank(customerEmail)) {
+                ApexPages.addMessage(new ApexPages.Message(ApexPages.Severity.ERROR, 
+                    'Please fill in your name and email address.'));
+                return null;
+            }
+            
+            // Validate email format
+            if (!isValidEmail(customerEmail)) {
+                ApexPages.addMessage(new ApexPages.Message(ApexPages.Severity.ERROR, 
+                    'Please enter a valid email address.'));
+                return null;
+            }
+            
+            // Create case
+            Case newCase = new Case();
+            newCase.Subject = enquiryType + ' Enquiry from ' + customerName;
+            newCase.Description = 'Customer enquiry about: ' + enquiryType + 
+                                '\nCustomer Name: ' + customerName + 
+                                '\nCustomer Email: ' + customerEmail;
+            newCase.Type = enquiryType;
+            newCase.Origin = 'Web';
+            newCase.Priority = 'Medium';
+            newCase.Status = 'New';
+            newCase.SuppliedName = customerName;
+            newCase.SuppliedEmail = customerEmail;
+            
+            insert newCase;
+            
+            // Handle file upload for Order enquiries
+            if (enquiryType == 'Order' && fileBody != null && fileBody.size() > 0) {
+                createContentVersion(newCase.Id);
+            }
+            
+            // Set success message
+            caseReference = newCase.CaseNumber;
+            showSuccess = true;
+            
+            // Clear form
+            clearForm();
+            
+            ApexPages.addMessage(new ApexPages.Message(ApexPages.Severity.CONFIRM, 
+                'Your enquiry has been submitted successfully. Case Reference: ' + caseReference));
+            
+            return null;
+            
+        } catch (Exception e) {
+            ApexPages.addMessage(new ApexPages.Message(ApexPages.Severity.ERROR, 
+                'An error occurred while submitting your enquiry. Please try again.'));
+            System.debug('Error creating case: ' + e.getMessage());
+            return null;
+        }
+    }
+    
+    // Create content version and link to case
+    private void createContentVersion(Id caseId) {
+        // Create ContentVersion
+        ContentVersion cv = new ContentVersion();
+        cv.Title = fileName;
+        cv.PathOnClient = fileName;
+        cv.VersionData = fileBody;
+        cv.Description = 'Order enquiry document from ' + customerName;
+        cv.IsMajorVersion = true;
+        
+        insert cv;
+        
+        // Get the ContentDocument ID
+        ContentVersion insertedCV = [SELECT ContentDocumentId FROM ContentVersion WHERE Id = :cv.Id LIMIT 1];
+        
+        // Create ContentDocumentLink to link file to case
+        ContentDocumentLink cdl = new ContentDocumentLink();
+        cdl.ContentDocumentId = insertedCV.ContentDocumentId;
+        cdl.LinkedEntityId = caseId;
+        cdl.ShareType = 'V'; // Viewer permission
+        cdl.Visibility = 'AllUsers';
+        
+        insert cdl;
+    }
+    
+    // Email validation
+    private Boolean isValidEmail(String emailAddress) {
+        String emailRegex = '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$';
+        Pattern pattern = Pattern.compile(emailRegex);
+        return pattern.matcher(emailAddress).matches();
+    }
+    
+    // Clear form after submission
+    private void clearForm() {
+        customerName = '';
+        customerEmail = '';
+        enquiryType = 'Order';
+        fileBody = null;
+        fileName = null;
+        contentType = null;
+    }
+    
+    // Reset form
+    public PageReference resetForm() {
+        showSuccess = false;
+        clearForm();
+        return null;
+    }
+}
